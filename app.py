@@ -289,6 +289,98 @@ def test_real_run():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/force-check')
+def force_check():
+    """Wymuś sprawdzenie nowych postów"""
+    try:
+        instagram_username = os.getenv('INSTAGRAM_USERNAME')
+        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+        
+        if not instagram_username or not discord_webhook_url:
+            return jsonify({"error": "Missing env vars"}), 400
+        
+        # Sprawdź ostatnie 3 posty
+        cmd = [
+            'python', '-m', 'instawebhooks',
+            instagram_username,
+            discord_webhook_url,
+            '-i', '30',  # Krótki interval
+            '-p', '3',   # Ostatnie 3 posty
+            '-c', '{owner_name} dodała nowy post na Instagramie\n{post_url}\n@everyone',
+            '-v'
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=45
+        )
+        
+        return jsonify({
+            "command": ' '.join(cmd),
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+            "note": "Checking last 3 posts with custom message format"
+        })
+        
+    except subprocess.TimeoutExpired as e:
+        return jsonify({
+            "error": "Command timed out",
+            "stdout": e.stdout.decode() if e.stdout else "",
+            "stderr": e.stderr.decode() if e.stderr else ""
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/force-check-5')
+def force_check_5():
+    """Wymuś sprawdzenie ostatnich 5 postów"""
+    try:
+        instagram_username = os.getenv('INSTAGRAM_USERNAME')
+        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+        
+        if not instagram_username or not discord_webhook_url:
+            return jsonify({"error": "Missing env vars"}), 400
+        
+        # Sprawdź ostatnie 5 postów - na pewno wyśle
+        cmd = [
+            'python', '-m', 'instawebhooks',
+            instagram_username,
+            discord_webhook_url,
+            '-i', '30',
+            '-p', '5',   # Ostatnie 5 postów
+            '-c', '{owner_name} dodała nowy post na Instagramie\n{post_url}\n@everyone',
+            '-v'
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        return jsonify({
+            "command": ' '.join(cmd),
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+            "note": "This will send last 5 posts - should definitely work!"
+        })
+        
+    except subprocess.TimeoutExpired as e:
+        return jsonify({
+            "error": "Command timed out",
+            "stdout": e.stdout.decode() if e.stdout else "",
+            "stderr": e.stderr.decode() if e.stderr else ""
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/restart-monitoring')
 def restart_monitoring():
     """Restart monitoringu"""
@@ -310,7 +402,8 @@ def stop_monitoring():
     global app_status
     app_status["monitoring"] = False
     return jsonify({"message": "Monitoring stopped"})
-
+    
+    
 @app.route('/send-test-post')
 def send_test_post():
     """Wyślij testowy post na Discord"""
@@ -351,51 +444,6 @@ def send_test_post():
             "message": "Test post sent"
         })
         
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/force-check')
-def force_check():
-    """Wymuś sprawdzenie nowych postów"""
-    try:
-        instagram_username = os.getenv('INSTAGRAM_USERNAME')
-        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-        
-        if not instagram_username or not discord_webhook_url:
-            return jsonify({"error": "Missing env vars"}), 400
-        
-        # Komenda z catchup - sprawdzi ostatni post
-        cmd = [
-            'python', '-m', 'instawebhooks',
-            instagram_username,
-            discord_webhook_url,
-            '-i', '60',  # 1 minuta
-            '-p', '1',   # Sprawdź ostatni post
-            '-v'
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        return jsonify({
-            "command": ' '.join(cmd),
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "success": result.returncode == 0,
-            "note": "This should send the latest post if found"
-        })
-        
-    except subprocess.TimeoutExpired as e:
-        return jsonify({
-            "error": "Command timed out",
-            "stdout": e.stdout.decode() if e.stdout else "",
-            "stderr": e.stderr.decode() if e.stderr else ""
-        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
