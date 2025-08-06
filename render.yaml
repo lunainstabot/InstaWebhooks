@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: instawebhooks-web
+    env: python
+    buildCommand: pip install -r requirements.txt && pip install .
+    startCommand: python app.py
+    envVars:
+      - key: INSTAGRAM_USERNAME
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: REFRESH_INTERVAL
+        value: "3600"
+      - key: MESSAGE_CONTENT
+        value: ""
