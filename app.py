@@ -1,9 +1,10 @@
 from flask import Flask, jsonify
 import threading
-import subprocess
 import os
 import time
 import logging
+from instagram_monitor import InstagramMonitor
+from database import db_manager
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -12,57 +13,55 @@ logging.basicConfig(level=logging.INFO)
 app_status = {
     "started_at": time.time(),
     "monitoring": False,
-    "last_ping": None
+    "last_ping": None,
+    "monitor_instance": None
 }
 
 def run_instagram_monitor():
-    """Uruchamia monitoring Instagram"""
+    """Uruchamia monitoring Instagram z bazą danych"""
     global app_status
     
     instagram_username = os.getenv('INSTAGRAM_USERNAME')
     discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-    refresh_interval = os.getenv('REFRESH_INTERVAL', '3600')
+    refresh_interval = int(os.getenv('REFRESH_INTERVAL', '3600'))
     message_content = os.getenv('MESSAGE_CONTENT', '')
     
     if not instagram_username or not discord_webhook_url:
         logging.error("Błąd: Brak wymaganych zmiennych środowiskowych")
         return
     
-    cmd = [
-        'python', '-m', 'instawebhooks',
-        instagram_username,
-        discord_webhook_url,
-        '-i', refresh_interval,
-        '-v'
-    ]
+    # Stwórz instancję monitora
+    monitor = InstagramMonitor(
+        username=instagram_username,
+        webhook_url=discord_webhook_url,
+        refresh_interval=refresh_interval,
+        message_content=message_content
+    )
     
-    if message_content:
-        cmd.extend(['-c', message_content])
-    
-    # Dodaj logowanie jeśli są dane
-    instagram_login = os.getenv('INSTAGRAM_LOGIN')
-    instagram_password = os.getenv('INSTAGRAM_PASSWORD')
-    
-    if instagram_login and instagram_password:
-        cmd.extend(['-l', instagram_login, instagram_password])
-    
-    logging.info(f"Uruchamiam monitoring: {instagram_username}")
+    app_status["monitor_instance"] = monitor
     app_status["monitoring"] = True
     
     try:
-        subprocess.run(cmd)
+        monitor.run_with_database_tracking()
     except Exception as e:
         logging.error(f"Błąd monitoring: {e}")
+    finally:
         app_status["monitoring"] = False
 
 @app.route('/')
 def home():
+    instagram_username = os.getenv('INSTAGRAM_USERNAME', 'not_set')
+    stats = db_manager.get_stats(instagram_username) if instagram_username != 'not_set' else {}
+    
     return jsonify({
-        "service": "InstaWebhooks",
+        "service": "InstaWebhooks with PostgreSQL",
         "status": "running",
         "uptime_seconds": int(time.time() - app_status["started_at"]),
         "monitoring": app_status["monitoring"],
-        "instagram_user": os.getenv('INSTAGRAM_USERNAME', 'not_set')
+        "instagram_user": instagram_username,
+        "database_connected": db_manager.engine is not None,
+        "stats": stats,
+        "message_format": "Custom format with newlines"
     })
 
 @app.route('/health')
@@ -75,6 +74,70 @@ def health():
 def ping():
     """Alternatywny endpoint dla UptimeRobot"""
     return "pong", 200
+
+@app.route('/stats')
+def stats():
+    """Endpoint ze statystykami z bazy danych"""
+    instagram_username = os.getenv('INSTAGRAM_USERNAME', 'not_set')
+    if instagram_username == 'not_set':
+        return jsonify({"error": "Instagram username not configured"}), 400
+    
+    stats = db_manager.get_stats(instagram_username)
+    return jsonify({
+        "username": instagram_username,
+        "database_connected": db_manager.engine is not None,
+        "stats": stats,
+        "monitoring": app_status["monitoring"]
+    })
+
+@app.route('/posts')
+def recent_posts():
+    """Endpoint z ostatnimi postami z bazy"""
+    instagram_username = os.getenv('INSTAGRAM_USERNAME', 'not_set')
+    if instagram_username == 'not_set' or not db_manager.SessionLocal:
+        return jsonify({"error": "Database not available"}), 400
+    
+    session = db_manager.get_session()
+    try:
+        from database import InstagramPost
+        posts = session.query(InstagramPost).filter_by(
+            username=instagram_username
+        ).order_by(InstagramPost.created_at.desc()).limit(10).all()
+        
+        posts_data = []
+        for post in posts:
+            posts_data.append({
+                "shortcode": post.post_shortcode,
+                "url": post.post_url,
+                "caption": post.post_caption[:100] + "..." if post.post_caption and len(post.post_caption) > 100 else post.post_caption,
+                "sent_to_discord": post.sent_to_discord,
+                "sent_at": post.sent_at.isoformat() if post.sent_at else None,
+                "created_at": post.created_at.isoformat() if post.created_at else None
+            })
+        
+        return jsonify({
+            "username": instagram_username,
+            "posts": posts_data,
+            "total_posts": len(posts_data)
+        })
+        
+    except Exception as e:
+        logging.error(f"Błąd pobierania postów: {e}")
+        return jsonify({"error": "Database error"}), 500
+    finally:
+        session.close()
+
+@app.route('/stop')
+def stop_monitoring():
+    """Zatrzymuje monitoring (dla debugowania)"""
+    global app_status
+    
+    if app_status["monitor_instance"]:
+        app_status["monitor_instance"].stop()
+        app_status["monitoring"] = False
+        return jsonify({"message": "Monitoring stopped"})
+    else:
+        return jsonify({"message": "No monitoring instance found"})
 
 if __name__ == '__main__':
     # Uruchom monitoring w osobnym wątku
