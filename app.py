@@ -446,6 +446,143 @@ def send_test_post():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.route('/debug-verbose')
+def debug_verbose():
+    """Bardzo szczegółowy debug InstaWebhooks"""
+    try:
+        instagram_username = os.getenv('INSTAGRAM_USERNAME')
+        discord_webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+        
+        if not instagram_username or not discord_webhook_url:
+            return jsonify({"error": "Missing env vars"}), 400
+        
+        # Komenda z maksymalnym debugowaniem
+        cmd = [
+            'python', '-m', 'instawebhooks',
+            instagram_username,
+            discord_webhook_url,
+            '-i', '10',  # Bardzo krótki interval
+            '-p', '1',   # Tylko 1 post
+            '-v',        # Verbose
+            '-c', 'TEST: {owner_name} - {post_url}'
+        ]
+        
+        logging.info(f"Uruchamiam debug command: {' '.join(cmd)}")
+        
+        # Uruchom z real-time output
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        # Zbieraj output przez 30 sekund
+        output_lines = []
+        error_lines = []
+        start_time = time.time()
+        
+        while time.time() - start_time < 30:
+            # Sprawdź stdout
+            if process.stdout.readable():
+                line = process.stdout.readline()
+                if line:
+                    line = line.strip()
+                    output_lines.append(f"STDOUT: {line}")
+                    logging.info(f"Debug STDOUT: {line}")
+            
+            # Sprawdź stderr
+            if process.stderr.readable():
+                error_line = process.stderr.readline()
+                if error_line:
+                    error_line = error_line.strip()
+                    error_lines.append(f"STDERR: {error_line}")
+                    logging.error(f"Debug STDERR: {error_line}")
+            
+            # Sprawdź czy proces się skończył
+            if process.poll() is not None:
+                logging.info(f"Proces zakończony z kodem: {process.returncode}")
+                break
+            
+            time.sleep(0.1)
+        
+        # Zabij proces jeśli dalej działa
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+        
+        return jsonify({
+            "command": ' '.join(cmd),
+            "returncode": process.returncode,
+            "output_lines": output_lines,
+            "error_lines": error_lines,
+            "duration_seconds": int(time.time() - start_time),
+            "note": "Detailed real-time output capture"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/test-instagram-access')
+def test_instagram_access():
+    """Test czy możemy w ogóle dostać się do Instagram"""
+    try:
+        instagram_username = os.getenv('INSTAGRAM_USERNAME')
+        if not instagram_username:
+            return jsonify({"error": "No username set"}), 400
+        
+        # Test różnych endpointów Instagram
+        tests = []
+        
+        # Test 1: Główna strona profilu
+        try:
+            url1 = f"https://www.instagram.com/{instagram_username}/"
+            response1 = requests.get(url1, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            tests.append({
+                "test": "Profile page",
+                "url": url1,
+                "status": response1.status_code,
+                "success": response1.status_code == 200,
+                "content_length": len(response1.text),
+                "has_posts": '"edge_owner_to_timeline_media"' in response1.text
+            })
+        except Exception as e:
+            tests.append({
+                "test": "Profile page",
+                "error": str(e)
+            })
+        
+        # Test 2: Instagram API endpoint (jeśli dostępny)
+        try:
+            url2 = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={instagram_username}"
+            response2 = requests.get(url2, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'X-Requested-With': 'XMLHttpRequest'
+            })
+            tests.append({
+                "test": "API endpoint",
+                "url": url2,
+                "status": response2.status_code,
+                "success": response2.status_code == 200
+            })
+        except Exception as e:
+            tests.append({
+                "test": "API endpoint",
+                "error": str(e)
+            })
+        
+        return jsonify({
+            "username": instagram_username,
+            "tests": tests,
+            "note": "Testing Instagram access from Render servers"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     logging.info("=== URUCHAMIAM PROSTĄ APLIKACJĘ ===")
